@@ -1,7 +1,8 @@
 from collections import namedtuple
 import numpy as np
 import torch
-
+import heapq
+import functools
 
 Batch = namedtuple('Batch', ['state', 'action', 'next_state', 'reward', 'not_done', 'extra'])
 
@@ -74,3 +75,152 @@ class ReplayBuffer(object):
             extra = extra
         )
         return batch
+
+
+class PrioritizedReplayBuffer(object):
+    def __init__(self, state_shape:tuple, action_dim: int, batch_size: int, max_size=int(1e6), alpha: float = 0.5, beta: float = 0.5, sort_interval: int = int(1e6)):
+        self.max_size = max_size
+        self.ptr = 0
+        self.size = 0
+        self.sort_counter = 0
+
+        dtype = torch.uint8 if len(state_shape) == 3 else torch.float32 # unit8 is used to store images
+        self.state = torch.zeros((max_size, *state_shape), dtype=dtype)
+        self.action = torch.zeros((max_size, action_dim), dtype=dtype)
+        self.next_state = torch.zeros((max_size, *state_shape), dtype=dtype)
+        self.reward = torch.zeros((max_size, 1), dtype=dtype)
+        self.not_done = torch.zeros((max_size, 1), dtype=dtype)
+        self.extra = {}
+
+        self.priority_arr = []
+        self.alpha = alpha
+        self.beta = beta
+        self.sort_interval = sort_interval
+        self.batch_size = batch_size
+        self.bucket_ids = []
+        self.use_prios = self.compute_buckets()
+
+        # pre compute buckets
+    
+    def compute_buckets(self):
+        den = functools.reduce(lambda a, b: a + (1 / b) **self.alpha, range(1, self.size+1), 0)
+        self.bucket_ids = [-1]
+        idx = 0
+        prob = 0
+        while idx < self.size:
+            prob += ((1 / (idx + 1)) ** self.alpha) / den
+            if prob >= 1 / self.batch_size:
+                self.bucket_ids.append(idx)
+                prob -= 1 / self.batch_size
+            idx += 1
+        if len(self.bucket_ids) < self.batch_size + 1:
+            self.bucket_ids.append(self.size - 1)
+
+        if (len(self.bucket_ids) != self.batch_size + 1):
+            return False
+
+        return True
+
+    def _to_tensor(self, data, dtype=torch.float32):   
+        if isinstance(data, torch.Tensor):
+            return data.to(dtype=dtype)
+        return torch.tensor(data, dtype=dtype)
+
+    def add(self, state, action, next_state, reward, done, extra:dict=None):
+        self.state[self.ptr] = self._to_tensor(state, dtype=self.state.dtype)
+        self.action[self.ptr] = self._to_tensor(action)
+        self.next_state[self.ptr] = self._to_tensor(next_state, dtype=self.state.dtype)
+        self.reward[self.ptr] = self._to_tensor(reward)
+        self.not_done[self.ptr] = self._to_tensor(1. - done)
+
+        if extra is not None:
+            for key, value in extra.items():
+                if key not in self.extra: # init buffer
+                    self.extra[key] = torch.zeros((self.max_size, *value.shape), dtype=torch.float32)
+                self.extra[key][self.ptr] = self._to_tensor(value)
+        
+        # priority stuff TODO: drop the element with low priority 
+
+        new_prio_elem = (-np.inf, self.ptr)
+        if self.size == self.max_size:
+            for i in range(self.max_size):
+                if self.priority_arr[i][1] == self.ptr:
+                    self.priority_arr[i] = new_prio_elem
+                    heapq.heapify(self.priority_arr)
+                    break
+        else:
+            heapq.heappush(self.priority_arr, new_prio_elem)
+
+        self.ptr = (self.ptr + 1) % self.max_size
+        self.size = min(self.size + 1, self.max_size)
+
+        # occasionally completely sort the priority array
+        self.sort_counter += 1
+        if self.sort_counter == self.sort_interval:
+            self.priority_arr = sorted(self.priority_arr)
+            self.sort_counter = 0
+
+    def sample(self, device='cpu'):
+        if self.bucket_ids[-1] != self.max_size - 1:
+            self.use_prios = self.compute_buckets()
+        priority_arr_id = []
+        if not self.use_prios:
+            priority_arr_id = np.random.randint(0, self.size, size=self.batch_size).tolist()
+            ind = np.array([self.priority_arr[i][1] for i in priority_arr_id])
+            importance_sampling_weight = np.ones(self.batch_size)
+        else:
+            ind = []
+            props = []
+            den = functools.reduce(lambda a, b: a + (1 / b) **self.alpha, range(1, self.size+1), 0)
+            for sample in range(self.batch_size):
+                if self.bucket_ids[sample + 1] == self.bucket_ids[sample] + 1:
+                    i = self.bucket_ids[sample + 1]
+                else:
+                    i = np.random.randint(self.bucket_ids[sample]+1, self.bucket_ids[sample+1])
+
+                props.append((i+1)**self.alpha)
+                ind.append(self.priority_arr[i][1])
+                priority_arr_id.append(i)
+            ind = np.array(ind)
+            importance_sampling_weight = (den / (np.array(props) * self.size))**self.beta
+            importance_sampling_weight /= np.max(importance_sampling_weight)
+
+        if self.extra:
+            extra = {key: value[ind].to(device) for key, value in self.extra.items()}
+        else:
+            extra = {}
+
+        extra["prio_id"] = priority_arr_id
+        extra["importance_weight"] = torch.from_numpy(importance_sampling_weight).to(device)  
+
+        batch = Batch(
+            state = self.state[ind].to(device),
+            action = self.action[ind].to(device), 
+            next_state = self.next_state[ind].to(device), 
+            reward = self.reward[ind].to(device), 
+            not_done = self.not_done[ind].to(device), 
+            extra = extra
+        )
+        return batch
+
+    def get_all(self, device='cpu'):
+        if self.extra:
+            extra = {key: value[:self.size].to(device) for key, value in self.extra.items()}
+        else:
+            extra = {}
+
+        batch = Batch(
+            state = self.state[:self.size].to(device),
+            action = self.action[:self.size].to(device), 
+            next_state = self.next_state[:self.size].to(device), 
+            reward = self.reward[:self.size].to(device), 
+            not_done = self.not_done[:self.size].to(device), 
+            extra = extra
+        )
+        return batch
+
+    def update_priorities(self, new_priorities, transition_index):
+        for prio, i in zip(new_priorities, transition_index):
+            j = self.priority_arr[i][1]
+            self.priority_arr[i] = (prio, j)
+        heapq.heapify(self.priority_arr)
