@@ -1,0 +1,1 @@
+{"num_episodes": 5000, "first_episode_over_target": 860, "first_episode_test_over_target": -1, "time_for_all_episodes": 3903.4056466919997, "time_until_test_over_target": -1, "time_until_over_target": 690.3563855760004, "stop_avg_rew": 0, "end_avg_rew": 132.65421235822527}

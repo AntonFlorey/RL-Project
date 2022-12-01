@@ -1,0 +1,10 @@
+# @package _global_
+env_name: lunarlander_continuous_medium
+agent_name: pg
+run_id: ??? # decided during execution
+
+train_episodes: 5000
+gamma: 0.99
+lr: 3e-4
+batch_size: 100 #100
+buffer_size: 1e6
