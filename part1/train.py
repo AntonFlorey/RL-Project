@@ -42,10 +42,10 @@ def train(agent, env, max_episode_steps=1000):
         next_obs, reward, done, _ = env.step(to_numpy(action))
 
         # Store action's outcome (so that the agent can improve its policy)
-        if isinstance(agent, PG_AC):
-            done_bool = done
-            agent.record(obs, act_logprob, reward, done_bool, next_obs)
-        elif isinstance(agent, DDPG):
+        # if isinstance(agent, PG_AC):
+        #     done_bool = done
+        #     agent.record(obs, act_logprob, reward, done_bool, next_obs)
+        if isinstance(agent, DDPG):
             # ignore the time truncated terminal signal
             done_bool = float(done) if episode_timesteps < max_episode_steps else 0 
             agent.record(obs, action, next_obs, reward, done_bool)
@@ -144,9 +144,9 @@ def main(cfg):
             env.reset(seed=seed)
 
             # init agent
-            if cfg.agent_name == "pg_ac":
-                agent = PG_AC(state_shape[0], action_dim, cfg.lr, cfg.gamma)
-            elif cfg.agent_name == "ddpg": # ddpg
+            # if cfg.agent_name == "pg_ac":
+            #     agent = PG_AC(state_shape[0], action_dim, cfg.lr, cfg.gamma)
+            if cfg.agent_name == "ddpg": # ddpg
                 agent = DDPG(state_shape, action_dim, max_action,
                             cfg.lr, cfg.gamma, cfg.tau, cfg.batch_size, cfg.buffer_size, 
                             cfg.actor_hd, cfg.critic_hd)
@@ -229,9 +229,9 @@ def main(cfg):
     else: # testing
         for seed in cfg.seeds:
             # init agent
-            if cfg.agent_name == "pg_ac":
-                agent = PG_AC(state_shape[0], action_dim, cfg.lr, cfg.gamma)
-            elif cfg.agent_name == "ddpg": # ddpg
+            # if cfg.agent_name == "pg_ac":
+            #     agent = PG_AC(state_shape[0], action_dim, cfg.lr, cfg.gamma)
+            if cfg.agent_name == "ddpg": # ddpg
                 agent = DDPG(state_shape, action_dim, max_action,
                             cfg.lr, cfg.gamma, cfg.tau, cfg.batch_size, cfg.buffer_size,
                             cfg.actor_hd, cfg.critic_hd)
@@ -250,9 +250,9 @@ def main(cfg):
      
         if cfg.save_video:
             # init agent
-            if cfg.agent_name == "pg_ac":
-                agent = PG_AC(state_shape[0], action_dim, cfg.lr, cfg.gamma)
-            elif cfg.agent_name == "ddpg": # ddpg
+            # if cfg.agent_name == "pg_ac":
+            #     agent = PG_AC(state_shape[0], action_dim, cfg.lr, cfg.gamma)
+            if cfg.agent_name == "ddpg": # ddpg
                 agent = DDPG(state_shape, action_dim, max_action,
                             cfg.lr, cfg.gamma, cfg.tau, cfg.batch_size, cfg.buffer_size,
                             cfg.actor_hd, cfg.critic_hd)
