@@ -139,6 +139,8 @@ class PrioritizedReplayBuffer(object):
         return torch.tensor(data, dtype=dtype)
 
     def add(self, state, action, next_state, reward, done, extra:dict=None):
+
+        # add transition [s, a, s', r, d] to buffer
         self.state[self.ptr] = self._to_tensor(state, dtype=self.state.dtype)
         self.action[self.ptr] = self._to_tensor(action)
         self.next_state[self.ptr] = self._to_tensor(next_state, dtype=self.state.dtype)
@@ -153,23 +155,36 @@ class PrioritizedReplayBuffer(object):
         
         # priority stuff TODO: drop the element with low priority 
 
+        # priority_arr is a list of tuples (priority, index)
+        # create a new tuple with -infty priority and the current index
         new_prio_elem = (-np.inf, self.ptr)
+        # if the buffer is full ...
         if self.size == self.max_size:
+            # ... replace the oldest element ([old_priority, self.ptr]) with the new one
             for i in range(self.max_size):
                 if self.priority_arr[i][1] == self.ptr:
+                    # replace the element
                     self.priority_arr[i] = new_prio_elem
+                    # self.priority_arr is not a heap, so heapify
                     heapq.heapify(self.priority_arr)
                     break
+        # if there is space in the buffer ...
         else:
+            # ... add the new element to the list
             heapq.heappush(self.priority_arr, new_prio_elem)
 
+        # update self.ptr and current size of the buffer
         self.ptr = (self.ptr + 1) % self.max_size
         self.size = min(self.size + 1, self.max_size)
 
         # occasionally completely sort the priority array
+        # increment the sort counter
         self.sort_counter += 1
+        # if the sort counter is equal to the sort interval
         if self.sort_counter == self.sort_interval:
+            # ... sort the priority array
             self.priority_arr = sorted(self.priority_arr)
+            # reset the sort counter
             self.sort_counter = 0
 
     def sample(self, device='cpu'):
