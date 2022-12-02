@@ -1,4 +1,4 @@
-from collections import namedtuple
+xfrom collections import namedtuple
 import numpy as np
 import torch
 import heapq
@@ -326,7 +326,6 @@ class PrioritizedReplayBuffer2(object):
 
     def sample(self, device='cpu'):
         debug = False
-
         f = (lambda a: np.minimum(self.size-1, np.floor(self.size * a)))
         priority_arr_id = f(np.random.power(self.alpha + 1, size=self.batch_size)).astype(np.int32)
         ind = np.array([self.priority_arr[i][1] for i in priority_arr_id])
