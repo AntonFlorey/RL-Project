@@ -9,6 +9,6 @@ gamma: 0.95 #0.95
 lr: 1e-3 #
 tau: 0.01 #0.01
 batch_size: 256 #256
-buffer_size: 10000 #1e6
+buffer_size: 1e6 #1e6
 actor_hd: 400 #400
 critic_hd: 400 #400

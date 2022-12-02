@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from torch import nn
 import numpy as np
 from common import helper as h
-from common.buffer import Batch, ReplayBuffer, PrioritizedReplayBuffer
+from common.buffer import Batch, ReplayBuffer, PrioritizedReplayBuffer, PrioritizedReplayBuffer2
 
 import time
 
@@ -59,7 +59,7 @@ class DDPG(object):
         self.q = Critic(state_dim, action_dim, critic_hidden_dim).to(device)
         self.q_target = copy.deepcopy(self.q)
         self.q_optim = torch.optim.Adam(self.q.parameters(), lr=lr)
-        self.buffer = PrioritizedReplayBuffer(state_shape, action_dim, batch_size, max_size=int(buffer_size))
+        self.buffer = PrioritizedReplayBuffer2(state_shape, action_dim, batch_size, max_size=int(buffer_size), alpha=0, beta=0, sort_interval=1000)
         
         self.batch_size = batch_size
         self.gamma = gamma
@@ -68,7 +68,7 @@ class DDPG(object):
         # used to count number of transitions in a trajectory
         self.buffer_ptr = 0
         self.buffer_head = 0 
-        self.random_transition = 5000 # collect 5k random data for better exploration
+        self.random_transition = 500 # collect 5k random data for better exploration
     
     def adjust_learning_rate(self, factor = 0.1):
         for g in self.pi_optim.param_groups:
@@ -107,8 +107,12 @@ class DDPG(object):
         
         done_mask = batch.not_done.to(torch.int64)
         q_targ = batch.reward + torch.mul(self.gamma * self.q_target(batch.next_state, self.pi_target(batch.next_state)), done_mask)
-        q_diff = q_targ.detach() - self.q(batch.state, batch.action)
-        critic_loss = torch.mean(torch.mul(batch.extra["importance_weight"].detach(), torch.square(q_diff))) # importance sampling
+        #q_diff = q_targ.detach() - self.q(batch.state, batch.action)
+        #critic_loss = torch.mean(torch.mul(batch.extra["importance_weight"].detach(), torch.square(q_diff))) # importance sampling
+
+        loss_fct = torch.nn.MSELoss()
+        critic_loss = loss_fct(self.q(batch.state, batch.action), q_targ.detach())
+
         self.q_optim.zero_grad()
         critic_loss.backward()
         # update qs parameters

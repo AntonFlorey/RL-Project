@@ -10,20 +10,20 @@ seeds:
     - 48
     - 128
 
-exp_name: bipedalwalker_easy
+exp_name: lander_medium
 run_id: ??? # decided during execution
 
 testing: false
 model_path: default
 
-save_video: true
+save_video: false
 save_logging: false
 save_model: true
 save_stats: true
 use_wandb: true
 silent: false
 
-agent: ddpg_400
+agent: ddpg_test
 target_rew: 100
 
 run_suffix: 0
