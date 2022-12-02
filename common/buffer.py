@@ -103,19 +103,31 @@ class PrioritizedReplayBuffer(object):
         # pre compute buckets
     
     def compute_buckets(self):
+        # compute partial sum of 1/p 
         den = functools.reduce(lambda a, b: a + (1 / b) **self.alpha, range(1, self.size+1), 0)
+        # den = np.sum(np.array([1 / (i+1) ** self.alpha for i in range(1, self.size+1)]))
+
         self.bucket_ids = [-1]
+        # loop variable        
         idx = 0
+        # current probability mass count
         prob = 0
         while idx < self.size:
+            # add current discrete probability mass to counter
             prob += ((1 / (idx + 1)) ** self.alpha) / den
+            # if probability mass is greater than 1 / batch_size ...
             if prob >= 1 / self.batch_size:
+                # ... add the index to the bucket_ids list
                 self.bucket_ids.append(idx)
+                # reset probability mass counter
                 prob -= 1 / self.batch_size
+            # increment index
             idx += 1
+        # add the last index
         if len(self.bucket_ids) < self.batch_size + 1:
             self.bucket_ids.append(self.size - 1)
 
+        # check if we have enough buckets
         if (len(self.bucket_ids) != self.batch_size + 1):
             return False
 
@@ -127,6 +139,8 @@ class PrioritizedReplayBuffer(object):
         return torch.tensor(data, dtype=dtype)
 
     def add(self, state, action, next_state, reward, done, extra:dict=None):
+
+        # add transition [s, a, s', r, d] to buffer
         self.state[self.ptr] = self._to_tensor(state, dtype=self.state.dtype)
         self.action[self.ptr] = self._to_tensor(action)
         self.next_state[self.ptr] = self._to_tensor(next_state, dtype=self.state.dtype)
@@ -141,23 +155,36 @@ class PrioritizedReplayBuffer(object):
         
         # priority stuff TODO: drop the element with low priority 
 
+        # priority_arr is a list of tuples (priority, index)
+        # create a new tuple with -infty priority and the current index
         new_prio_elem = (-np.inf, self.ptr)
+        # if the buffer is full ...
         if self.size == self.max_size:
+            # ... replace the oldest element ([old_priority, self.ptr]) with the new one
             for i in range(self.max_size):
                 if self.priority_arr[i][1] == self.ptr:
+                    # replace the element
                     self.priority_arr[i] = new_prio_elem
+                    # self.priority_arr is not a heap, so heapify
                     heapq.heapify(self.priority_arr)
                     break
+        # if there is space in the buffer ...
         else:
+            # ... add the new element to the list
             heapq.heappush(self.priority_arr, new_prio_elem)
 
+        # update self.ptr and current size of the buffer
         self.ptr = (self.ptr + 1) % self.max_size
         self.size = min(self.size + 1, self.max_size)
 
         # occasionally completely sort the priority array
+        # increment the sort counter
         self.sort_counter += 1
+        # if the sort counter is equal to the sort interval
         if self.sort_counter == self.sort_interval:
+            # ... sort the priority array
             self.priority_arr = sorted(self.priority_arr)
+            # reset the sort counter
             self.sort_counter = 0
 
     def sample(self, device='cpu'):
