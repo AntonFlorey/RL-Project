@@ -298,8 +298,10 @@ class PrioritizedReplayBuffer2(object):
                 print("Sorted the queue:", self.priority_arr)
 
     def sample(self, device='cpu'):
-        debug = True
-        priority_arr_id = np.round((self.size-1) * np.random.power(self.alpha + 1, size=self.batch_size)).astype(np.int32)
+        debug = False
+
+        f = (lambda a: np.minimum(self.size-1, np.floor(self.size * a)))
+        priority_arr_id = f(np.random.power(self.alpha + 1, size=self.batch_size)).astype(np.int32)
         ind = np.array([self.priority_arr[i][1] for i in priority_arr_id])
 
         den = functools.reduce(lambda a, b: a + (1 / b) **self.alpha, range(1, self.size+1), 0)
