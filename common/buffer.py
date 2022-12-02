@@ -103,19 +103,31 @@ class PrioritizedReplayBuffer(object):
         # pre compute buckets
     
     def compute_buckets(self):
+        # compute partial sum of 1/p 
         den = functools.reduce(lambda a, b: a + (1 / b) **self.alpha, range(1, self.size+1), 0)
+        # den = np.sum(np.array([1 / (i+1) ** self.alpha for i in range(1, self.size+1)]))
+
         self.bucket_ids = [-1]
+        # loop variable        
         idx = 0
+        # current probability mass count
         prob = 0
         while idx < self.size:
+            # add current discrete probability mass to counter
             prob += ((1 / (idx + 1)) ** self.alpha) / den
+            # if probability mass is greater than 1 / batch_size ...
             if prob >= 1 / self.batch_size:
+                # ... add the index to the bucket_ids list
                 self.bucket_ids.append(idx)
+                # reset probability mass counter
                 prob -= 1 / self.batch_size
+            # increment index
             idx += 1
+        # add the last index
         if len(self.bucket_ids) < self.batch_size + 1:
             self.bucket_ids.append(self.size - 1)
 
+        # check if we have enough buckets
         if (len(self.bucket_ids) != self.batch_size + 1):
             return False
 
