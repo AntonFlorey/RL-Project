@@ -23,7 +23,7 @@ save_stats: true
 use_wandb: true
 silent: false
 
-agent: ddpg_test
+agent: ddpg
 target_rew: 100
 
 run_suffix: 0

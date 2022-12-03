@@ -1,11 +1,12 @@
-xfrom collections import namedtuple
+from collections import namedtuple
 import numpy as np
 import torch
 import heapq
 import functools
+from common.prio_queue import BinaryHeap
+import sys
 
 Batch = namedtuple('Batch', ['state', 'action', 'next_state', 'reward', 'not_done', 'extra'])
-
 
 class ReplayBuffer(object):
     def __init__(self, state_shape:tuple, action_dim: int, max_size=int(1e6)):
@@ -78,7 +79,8 @@ class ReplayBuffer(object):
 
 
 class PrioritizedReplayBuffer(object):
-    def __init__(self, state_shape:tuple, action_dim: int, batch_size: int, max_size=int(1e6), alpha: float = 0.5, beta: float = 0.5, sort_interval: int = int(1e6)):
+    def __init__(self, state_shape:tuple, action_dim: int, batch_size: int, max_size=int(1e6), 
+                 alpha: float = 0.5, beta: float = 0.5, sort_interval: int = int(1e6), sample_start: int = 5000, num_dists: int = 100):
         self.max_size = max_size
         self.ptr = 0
         self.size = 0
@@ -92,46 +94,53 @@ class PrioritizedReplayBuffer(object):
         self.not_done = torch.zeros((max_size, 1), dtype=dtype)
         self.extra = {}
 
-        self.priority_arr = []
         self.alpha = alpha
         self.beta = beta
         self.sort_interval = sort_interval
         self.batch_size = batch_size
-        self.bucket_ids = []
-        self.use_prios = self.compute_buckets()
+        self.sample_start = sample_start
+        self.num_dist_parts = num_dists
 
-        # pre compute buckets
+        # pre compute buckets and probabilities
+        self.dists = self.compute_dists()
+        # priority queue
+        self.priority_queue = BinaryHeap(priority_size=self.max_size)
+
     
-    def compute_buckets(self):
-        # compute partial sum of 1/p 
-        den = functools.reduce(lambda a, b: a + (1 / b) **self.alpha, range(1, self.size+1), 0)
-        # den = np.sum(np.array([1 / (i+1) ** self.alpha for i in range(1, self.size+1)]))
+    def compute_dists(self):
 
-        self.bucket_ids = [-1]
-        # loop variable        
-        idx = 0
-        # current probability mass count
-        prob = 0
-        while idx < self.size:
-            # add current discrete probability mass to counter
-            prob += ((1 / (idx + 1)) ** self.alpha) / den
-            # if probability mass is greater than 1 / batch_size ...
-            if prob >= 1 / self.batch_size:
-                # ... add the index to the bucket_ids list
-                self.bucket_ids.append(idx)
-                # reset probability mass counter
-                prob -= 1 / self.batch_size
-            # increment index
-            idx += 1
-        # add the last index
-        if len(self.bucket_ids) < self.batch_size + 1:
-            self.bucket_ids.append(self.size - 1)
+        res = {}
+        dist_num = 1
+        size_inc = int(np.floor(self.max_size / self.num_dist_parts))
 
-        # check if we have enough buckets
-        if (len(self.bucket_ids) != self.batch_size + 1):
-            return False
+        if size_inc > self.sample_start:
+            print("SMALLEST BUFFER SIZE OPTION IS TO LARGE!")
+            needed = np.ceil(self.max_size / self.sample_start)
+            print("Need at least "+str(needed)+" buffer size options")
 
-        return True
+        # for each buffer size compute the buckets
+        for buffersize in range(size_inc, self.max_size+1, size_inc):
+            ps = [np.power(float(x), -self.alpha) for x in range(1, buffersize + 1)]
+            den = np.sum(ps)
+            pdf = np.array([x / den for x in ps])
+            cdf = np.cumsum(pdf)
+            buckets = [0] * (self.batch_size+1)
+            buckets[self.batch_size] = buffersize # last bucket border is always the end of the buffer
+            step = 1.0 / float(self.batch_size) # probability of each bucket region
+            buffer_idx = 1
+            for bucket_i in range(1, self.batch_size):
+                while cdf[buffer_idx] < step:
+                    buffer_idx += 1
+                buckets[bucket_i] = buffer_idx
+                buffer_idx += 1
+                step += 1.0 / float(self.batch_size)
+            distribution = {'pdf': pdf,
+                            'buckets': buckets}
+            res[dist_num] = distribution
+            dist_num+= 1
+            #print("dist "+str(dist_num-1)+" computed")
+
+        return res
 
     def _to_tensor(self, data, dtype=torch.float32):   
         if isinstance(data, torch.Tensor):
@@ -139,7 +148,6 @@ class PrioritizedReplayBuffer(object):
         return torch.tensor(data, dtype=dtype)
 
     def add(self, state, action, next_state, reward, done, extra:dict=None):
-
         # add transition [s, a, s', r, d] to buffer
         self.state[self.ptr] = self._to_tensor(state, dtype=self.state.dtype)
         self.action[self.ptr] = self._to_tensor(action)
@@ -152,74 +160,58 @@ class PrioritizedReplayBuffer(object):
                 if key not in self.extra: # init buffer
                     self.extra[key] = torch.zeros((self.max_size, *value.shape), dtype=torch.float32)
                 self.extra[key][self.ptr] = self._to_tensor(value)
-        
-        # priority stuff TODO: drop the element with low priority 
 
-        # priority_arr is a list of tuples (priority, index)
-        # create a new tuple with -infty priority and the current index
-        new_prio_elem = (-np.inf, self.ptr)
-        # if the buffer is full ...
-        if self.size == self.max_size:
-            # ... replace the oldest element ([old_priority, self.ptr]) with the new one
-            for i in range(self.max_size):
-                if self.priority_arr[i][1] == self.ptr:
-                    # replace the element
-                    self.priority_arr[i] = new_prio_elem
-                    # self.priority_arr is not a heap, so heapify
-                    heapq.heapify(self.priority_arr)
-                    break
-        # if there is space in the buffer ...
-        else:
-            # ... add the new element to the list
-            heapq.heappush(self.priority_arr, new_prio_elem)
+        # also update the priority queue
+        prio = self.priority_queue.get_max_priority() # const time
+        self.priority_queue.new_experience(priority=prio, e_id=int(self.ptr)) # log time
 
         # update self.ptr and current size of the buffer
         self.ptr = (self.ptr + 1) % self.max_size
         self.size = min(self.size + 1, self.max_size)
 
         # occasionally completely sort the priority array
-        # increment the sort counter
         self.sort_counter += 1
-        # if the sort counter is equal to the sort interval
         if self.sort_counter == self.sort_interval:
-            # ... sort the priority array
-            self.priority_arr = sorted(self.priority_arr)
-            # reset the sort counter
+            self.priority_queue.balance_tree()
             self.sort_counter = 0
 
     def sample(self, device='cpu'):
-        if self.bucket_ids[-1] != self.max_size - 1:
-            self.use_prios = self.compute_buckets()
-        priority_arr_id = []
-        if not self.use_prios:
-            priority_arr_id = np.random.randint(0, self.size, size=self.batch_size).tolist()
-            ind = np.array([self.priority_arr[i][1] for i in priority_arr_id])
-            importance_sampling_weight = np.ones(self.batch_size)
-        else:
-            ind = []
-            props = []
-            den = functools.reduce(lambda a, b: a + (1 / b) **self.alpha, range(1, self.size+1), 0)
-            for sample in range(self.batch_size):
-                if self.bucket_ids[sample + 1] == self.bucket_ids[sample] + 1:
-                    i = self.bucket_ids[sample + 1]
-                else:
-                    i = np.random.randint(self.bucket_ids[sample]+1, self.bucket_ids[sample+1])
 
-                props.append((i+1)**self.alpha)
-                ind.append(self.priority_arr[i][1])
-                priority_arr_id.append(i)
-            ind = np.array(ind)
-            importance_sampling_weight = (den / (np.array(props) * self.size))**self.beta
-            importance_sampling_weight /= np.max(importance_sampling_weight)
+        if self.size < self.sample_start:
+            sys.stderr.write('Record size less than learn start! Sample failed\n')
+            return False, False, False
+
+        # determine which buckets to use
+        buckets_idx = max(1, np.floor(self.size / self.max_size * self.num_dist_parts)) 
+        buckets = self.dists[buckets_idx]["buckets"]
+
+        # stratified sampling...
+        prio_indices = []
+        for bucket_id in range(self.batch_size):
+            if buckets[bucket_id] + 1 == buckets[bucket_id + 1]:
+                index = buckets[bucket_id] + 1
+            else:
+                index = np.random.randint(buckets[bucket_id] + 1, buckets[bucket_id + 1])
+            prio_indices.append(index)
+        #retrieve buffer indices
+        ind = np.array(self.priority_queue.priority_to_experience(prio_indices))
 
         if self.extra:
             extra = {key: value[ind].to(device) for key, value in self.extra.items()}
         else:
             extra = {}
 
-        extra["prio_id"] = priority_arr_id
-        extra["importance_weight"] = torch.from_numpy(importance_sampling_weight).to(device)  
+        # store indices for updating the prios
+        extra["buffer_id"] = ind
 
+        # compute importance sampling weight
+        pdf = self.dists[buckets_idx]['pdf']
+        probs = np.array([pdf[rank-1] for rank in prio_indices])
+        ws = np.power(probs * len(pdf), -self.beta)
+        ws = ws / np.max(ws) # normalize
+        extra["importance_weight"] = torch.from_numpy(ws).to(device) 
+
+        #build the batch and return it
         batch = Batch(
             state = self.state[ind].to(device),
             action = self.action[ind].to(device), 
@@ -246,11 +238,15 @@ class PrioritizedReplayBuffer(object):
         )
         return batch
 
-    def update_priorities(self, new_priorities, transition_index):
-        for prio, i in zip(new_priorities, transition_index):
-            j = self.priority_arr[i][1]
-            self.priority_arr[i] = (prio, j)
-        heapq.heapify(self.priority_arr)
+    def update_priorities(self, new_priorities, buffer_index):
+        """
+        update priority according indices and new priorities
+        :param new_priorities: list of new priorities
+        :transition_index: list of transition BUFFER indices (make sure that these are indices of the buffer...)
+        :return: None
+        """
+        for prio, i in zip(new_priorities, buffer_index):
+            self.priority_queue.update(prio, i)
 
 
 class PrioritizedReplayBuffer2(object):
@@ -390,7 +386,42 @@ class PrioritizedReplayBuffer2(object):
         if debug: 
             print("Updated but not sorted: ", self.priority_arr)
 
-        #heapq.heapify(self.priority_arr)
-        self.priority_arr = sorted(self.priority_arr)
+        heapq.heapify(self.priority_arr)
+        #self.priority_arr = sorted(self.priority_arr)
         if debug: 
             print("Final Prio Queue: ", self.priority_arr)
+
+
+if __name__ == "__main__":
+    max_size = 1000
+    dist_parts = 100
+    batch_size = 10
+    alpha = 0.5
+
+    res = {}
+    dist_num = 1
+    size_inc = int(np.floor(max_size / dist_parts))
+
+    # for each buffer size compute the buckets
+    for buffersize in range(size_inc, max_size+1, size_inc):
+        ps = [np.power(float(x), -alpha) for x in range(1, buffersize + 1)]
+        den = np.sum(ps)
+        pdf = [x / den for x in ps]
+        cdf = np.cumsum(pdf)
+        buckets = [0] * (batch_size+1)
+        buckets[batch_size] = buffersize # last bucket border is always the end of the buffer
+        step = 1.0 / float(batch_size) # probability of each bucket region
+        buffer_idx = 1
+        for bucket_i in range(1, batch_size):
+            while cdf[buffer_idx] < step:
+                buffer_idx += 1
+            buckets[bucket_i] = buffer_idx
+            buffer_idx += 1
+            step += 1.0 / float(batch_size)
+        distribution = {'pdf': np.asarray(pdf),
+                        'buckets': buckets}
+        res[dist_num] = distribution
+        dist_num+= 1
+        # print(np.array(pdf))
+        # print(cdf)
+        print(buckets)

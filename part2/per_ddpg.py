@@ -13,8 +13,6 @@ from common.buffer import Batch, ReplayBuffer, PrioritizedReplayBuffer, Prioriti
 
 import time
 
-policy_layer_size = 256 #256  
-critic_layer_size = 256 #256 
 expl_stddev = 0.1 #0.08
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -48,7 +46,8 @@ class Critic(nn.Module):
 
 
 class DDPG(object):
-    def __init__(self, state_shape, action_dim, max_action, lr, gamma, tau, batch_size, buffer_size=1e6, actor_hidden_dim=256, critic_hidden_dim=256):
+    def __init__(self, state_shape, action_dim, max_action, lr, gamma, tau, batch_size, alpha, beta, buffer_size=1e6, actor_hidden_dim=256, critic_hidden_dim=256,
+                 initial_samples=500, num_dists=100, sort_interval=1000):
         state_dim = state_shape[0]
         self.action_dim = action_dim
         self.max_action = max_action
@@ -59,7 +58,8 @@ class DDPG(object):
         self.q = Critic(state_dim, action_dim, critic_hidden_dim).to(device)
         self.q_target = copy.deepcopy(self.q)
         self.q_optim = torch.optim.Adam(self.q.parameters(), lr=lr)
-        self.buffer = PrioritizedReplayBuffer2(state_shape, action_dim, batch_size, max_size=int(buffer_size), alpha=0, beta=0, sort_interval=1000)
+        self.buffer = PrioritizedReplayBuffer(state_shape, action_dim, batch_size, max_size=int(buffer_size), alpha=alpha, beta=beta, sort_interval=sort_interval, 
+                                               sample_start=initial_samples, num_dists=num_dists)
         
         self.batch_size = batch_size
         self.gamma = gamma
@@ -68,7 +68,7 @@ class DDPG(object):
         # used to count number of transitions in a trajectory
         self.buffer_ptr = 0
         self.buffer_head = 0 
-        self.random_transition = 500 # collect 5k random data for better exploration
+        self.random_transition = initial_samples # collect random data for better exploration
     
     def adjust_learning_rate(self, factor = 0.1):
         for g in self.pi_optim.param_groups:
@@ -107,8 +107,10 @@ class DDPG(object):
         
         done_mask = batch.not_done.to(torch.int64)
         q_targ = batch.reward + torch.mul(self.gamma * self.q_target(batch.next_state, self.pi_target(batch.next_state)), done_mask)
-        #q_diff = q_targ.detach() - self.q(batch.state, batch.action)
-        #critic_loss = torch.mean(torch.mul(batch.extra["importance_weight"].detach(), torch.square(q_diff))) # importance sampling
+        q_diff = q_targ.detach() - self.q(batch.state, batch.action)
+
+        # debug importance weight
+        #critic_loss = torch.mean(torch.mul(batch.extra["importance_weight"].detach(), torch.square(q_diff).flatten())) # importance sampling
 
         loss_fct = torch.nn.MSELoss()
         critic_loss = loss_fct(self.q(batch.state, batch.action), q_targ.detach())
@@ -128,12 +130,11 @@ class DDPG(object):
         h.soft_update_params(self.q, self.q_target, self.tau)
         h.soft_update_params(self.pi, self.pi_target, self.tau)
 
-        # update replay priorities
-        q_priority = torch.abs(q_targ - self.q(batch.state, batch.action)).detach().flatten()
+        # update replay priorities 
+        q_priority = torch.abs(q_diff).detach().flatten().tolist()
         a = time.time()
-        self.buffer.update_priorities(q_priority.tolist() , batch.extra["prio_id"])
+        self.buffer.update_priorities(q_priority, batch.extra["buffer_id"])
         prio_update_time = time.time() - a
-
         # print("Sampling Overhead: ", sampling_time / (time.time() - start_t))
         # print("Prio Update Overhead: ", prio_update_time / (time.time() - start_t))
         ########## Your code ends here. ##########
