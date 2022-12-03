@@ -321,13 +321,20 @@ class PrioritizedReplayBuffer2(object):
                 print("Sorted the queue:", self.priority_arr)
 
     def sample(self, device='cpu'):
+        # debug mode
         debug = False
+        # f is the fraction of the buffer that is filled
         f = (lambda a: np.minimum(self.size-1, np.floor(self.size * a)))
+        # randomly sample a batch of indices from the buffer
         priority_arr_id = f(np.random.power(self.alpha + 1, size=self.batch_size)).astype(np.int32)
+        # .. get the corresponding priorities
         ind = np.array([self.priority_arr[i][1] for i in priority_arr_id])
 
+        # denominator for importance sampling weights
         den = functools.reduce(lambda a, b: a + (1 / b) **self.alpha, range(1, self.size+1), 0)
+        # importance sampling weights
         props = ((priority_arr_id + 1)**self.alpha)
+        # compute IS weights
         importance_sampling_weight = (den / (props * self.size))**self.beta
         importance_sampling_weight /= np.max(importance_sampling_weight)
 
@@ -346,6 +353,7 @@ class PrioritizedReplayBuffer2(object):
         extra["prio_id"] = priority_arr_id
         extra["importance_weight"] = torch.from_numpy(importance_sampling_weight).to(device)  
 
+        # create batch to be returned
         batch = Batch(
             state = self.state[ind].to(device),
             action = self.action[ind].to(device), 
