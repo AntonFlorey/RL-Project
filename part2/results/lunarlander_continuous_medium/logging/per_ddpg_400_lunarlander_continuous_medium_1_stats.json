@@ -1,1 +1,1 @@
-{"num_episodes": 5000, "early_stop_episode": 1600, "first_episode_over_target": 357, "time_for_all_episodes": 4464.177962106001, "time_until_early_stop": 3581.4625701709974, "time_until_over_target": 410.1406092579996, "early_stop_avg_rew": 129.59431035086982, "end_avg_rew": 122.97204922878866}
+{"num_episodes": 5000, "early_stop_episode": -1, "first_episode_over_target": -1, "time_for_all_episodes": 2353.8742662740083, "time_until_early_stop": -1, "time_until_over_target": -1, "early_stop_avg_rew": 0, "end_avg_rew": -315.08171379047036}

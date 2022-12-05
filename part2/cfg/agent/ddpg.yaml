@@ -1,21 +1,21 @@
 # @package _global_
-env_name: lunarlander_continuous_medium
+env_name: bipedalwalker_easy #lunarlander_continuous_medium
 agent_name: ddpg
 
 train_episodes: 5000
 early_stop_episodes: 500
 test_interval: 50
 gamma: 0.99 #0.95
-lr: 1e-3
+lr: 1e-4
 tau: 0.01 #0.01
-batch_size: 50 #256
+batch_size: 100 #256
 buffer_size: 1e5 #1e5 #1e6
 actor_hd: 400 #400
 critic_hd: 400 #400
 
 # prio experience replay options
 alpha: 0.5
-beta: 0.0
+beta: 0.5
 train_start: 500
 num_dists: 200
-sort_interval: 1e4
+sort_interval: 1e5

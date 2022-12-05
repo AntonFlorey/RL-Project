@@ -125,13 +125,10 @@ class BinaryHeap(object):
         else:
             # this e id is new, do insert
             success = self._insert(priority+1, e_id)
-
         # assert that the inserted item is on top
         assert self.priority_queue[1][0] == priority + 1
-            
         # write down the correct priority
         self.priority_queue[1] = (priority, e_id)
-
         return success
 
     def get_max_priority(self):

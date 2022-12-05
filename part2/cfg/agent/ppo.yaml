@@ -1,0 +1,17 @@
+# @package _global_
+env_name: bipedalwalker_easy #lunarlander_continuous_medium
+agent_name: ppo
+
+train_episodes: 5000
+early_stop_episodes: 500
+test_interval: 50
+gamma: 0.99 #0.95
+lr: 1e-4
+actor_hd: 128 #400
+critic_hd: 128 #400
+
+# ppo options
+clip_eps: 0.2
+entropy_weight: 0.01
+num_minibathes: 15
+minibatch_size: 256

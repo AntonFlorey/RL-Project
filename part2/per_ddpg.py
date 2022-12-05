@@ -76,26 +76,26 @@ class DDPG(object):
         for g in self.q_optim.param_groups:
             g['lr'] *= factor
 
-    def update(self,):
+    def update(self, ep):
         """ After collecting one trajectory, update the pi and q for #transition times: """
         info = {}
         update_iter = self.buffer_ptr - self.buffer_head # update the network once per transiton
 
         if self.buffer_ptr > self.random_transition: # update once have enough data
             for _ in range(update_iter):
-                info = self._update()
+                info = self._update(ep)
         
         # update the buffer_head:
         self.buffer_head = self.buffer_ptr
         return info
 
-    def _update(self,):
+    def _update(self, ep):
         start_t = time.time()
         sampling_time = 0
         prio_update_time = 0
 
         a = time.time()
-        batch:Batch = self.buffer.sample(device=device)
+        batch:Batch = self.buffer.sample(ep, device=device)
         sampling_time = time.time() - a
 
         # Task 2
@@ -110,10 +110,10 @@ class DDPG(object):
         q_diff = q_targ.detach() - self.q(batch.state, batch.action)
 
         # debug importance weight
-        #critic_loss = torch.mean(torch.mul(batch.extra["importance_weight"].detach(), torch.square(q_diff).flatten())) # importance sampling
+        critic_loss = torch.mean(torch.mul(batch.extra["importance_weight"].detach(), torch.square(q_diff).flatten())) # importance sampling
 
-        loss_fct = torch.nn.MSELoss()
-        critic_loss = loss_fct(self.q(batch.state, batch.action), q_targ.detach())
+        # loss_fct = torch.nn.MSELoss()
+        # critic_loss = loss_fct(self.q(batch.state, batch.action), q_targ.detach())
 
         self.q_optim.zero_grad()
         critic_loss.backward()

@@ -96,6 +96,7 @@ class PrioritizedReplayBuffer(object):
 
         self.alpha = alpha
         self.beta = beta
+        self.beta_inc = (1.0 - self.beta) / 2500
         self.sort_interval = sort_interval
         self.batch_size = batch_size
         self.sample_start = sample_start
@@ -168,14 +169,14 @@ class PrioritizedReplayBuffer(object):
         # update self.ptr and current size of the buffer
         self.ptr = (self.ptr + 1) % self.max_size
         self.size = min(self.size + 1, self.max_size)
-
+ 
         # occasionally completely sort the priority array
         self.sort_counter += 1
-        if self.sort_counter == self.sort_interval:
+        if self.sort_counter >= self.sort_interval:
             self.priority_queue.balance_tree()
             self.sort_counter = 0
 
-    def sample(self, device='cpu'):
+    def sample(self, train_ep, device='cpu'):
 
         if self.size < self.sample_start:
             sys.stderr.write('Record size less than learn start! Sample failed\n')
@@ -205,9 +206,10 @@ class PrioritizedReplayBuffer(object):
         extra["buffer_id"] = ind
 
         # compute importance sampling weight
+        beta = min(self.beta + train_ep * self.beta_inc, 1)
         pdf = self.dists[buckets_idx]['pdf']
         probs = np.array([pdf[rank-1] for rank in prio_indices])
-        ws = np.power(probs * len(pdf), -self.beta)
+        ws = np.power(probs * len(pdf), -beta)
         ws = ws / np.max(ws) # normalize
         extra["importance_weight"] = torch.from_numpy(ws).to(device) 
 
@@ -247,6 +249,7 @@ class PrioritizedReplayBuffer(object):
         """
         for prio, i in zip(new_priorities, buffer_index):
             self.priority_queue.update(prio, i)
+        self.sort_counter += len(new_priorities)
 
 
 class PrioritizedReplayBuffer2(object):
