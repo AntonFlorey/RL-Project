@@ -1,6 +1,6 @@
 import sys, os
 sys.path.insert(0, os.path.abspath(".."))
-os.environ["MUJOCO_GL"] = "egl" # for mujoco rendering
+os.environ["MUJOCO_GL"] = "glfw" # for mujoco rendering
 import time
 from pathlib import Path
 import json
@@ -10,6 +10,7 @@ import gym
 import hydra
 import wandb
 import warnings
+import numpy as np
 warnings.filterwarnings("ignore", category=UserWarning) 
 warnings.filterwarnings("ignore", category=DeprecationWarning) 
 
@@ -57,8 +58,9 @@ def train(agent: PPO, env, max_episode_steps=1000):
 
 # Function to test a trained policy
 @torch.no_grad()
-def test(agent, env, num_episode=10):
+def test(agent, env, num_episode=10, verbose=True):
     total_test_reward = 0
+    rewards = []
     for ep in range(num_episode):
         obs, done= env.reset(), False
         test_reward = 0
@@ -74,9 +76,15 @@ def test(agent, env, num_episode=10):
             test_reward += reward
 
         total_test_reward += test_reward
-        print("Test ep_reward:", test_reward)
+        rewards.append(test_reward)
+        if verbose:
+            print("Test ep_reward:", test_reward)
 
-    print("Average test reward:", total_test_reward/num_episode)
+    if verbose:
+        print("Average test reward:", total_test_reward/num_episode)
+        print("Test reward stddev:" , np.std(np.asarray(rewards)))
+
+    return total_test_reward / num_episode
 
 
 # The main function
@@ -145,8 +153,8 @@ def main(cfg):
             env.reset(seed=seed)
 
             # init agent
-            agent = PPO(state_shape, action_dim, cfg.lr, cfg.gamma, cfg.actor_hd, cfg.critic_hd, 
-                        cfg.clip_eps, cfg.entropy_weight, cfg.num_minibathes, cfg.minibatch_size)
+            agent = PPO(state_shape[0], action_dim, cfg.lr, cfg.gamma, cfg.actor_hd, cfg.critic_hd, 
+                        cfg.clip_eps, cfg.gae_lambda, cfg.entropy_weight, cfg.num_minibathes, cfg.minibatch_size)
             # collect some trainig data
             stats = {
                 'num_episodes': cfg.train_episodes,
@@ -224,8 +232,8 @@ def main(cfg):
     else: # testing
         for seed in cfg.seeds:
             # init agent
-            agent = PPO(state_shape, action_dim, cfg.lr, cfg.gamma, cfg.actor_hd, cfg.critic_hd, 
-                        cfg.clip_eps, cfg.entropy_weight, cfg.num_minibathes, cfg.minibatch_size)
+            agent = PPO(state_shape[0], action_dim, cfg.lr, cfg.gamma, cfg.actor_hd, cfg.critic_hd, 
+                        cfg.clip_eps, cfg.gae_lambda, cfg.entropy_weight, cfg.num_minibathes, cfg.minibatch_size)
                                
             cfg.model_path = work_dir/'model'/f'{cfg.agent}_{cfg.env_name}_{seed}_params.pt'
             print("Loading model from", cfg.model_path, "...")

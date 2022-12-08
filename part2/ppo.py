@@ -9,7 +9,7 @@ from common import helper as h
 from collections import namedtuple
 from common.helper import discount_rewards
 
-PPOBatch = namedtuple('Batch', ['state', 'action', 'action_logprob', 'next_state', 'reward', 'dis_rew', 'done', 'extra'])
+PPOBatch = namedtuple('Batch', ['state', 'action', 'action_logprob', 'next_state', 'reward', 'dis_rew', 'gae', 'done'])
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -20,7 +20,7 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 class Policy(nn.Module):
-    def __init__(self, state_dim, action_dim, hd):
+    def __init__(self, state_dim, action_dim, hd: int):
         super().__init__()
         self.actor_mean = nn.Sequential(
             layer_init(nn.Linear(state_dim, hd)), nn.Tanh(),
@@ -47,7 +47,7 @@ class Policy(nn.Module):
         return probs
 
 class Value(nn.Module):
-    def __init__(self, state_dim, hd):
+    def __init__(self, state_dim, hd: int):
         super().__init__()
         self.value = nn.Sequential(
             layer_init(nn.Linear(state_dim, hd)), nn.Tanh(),
@@ -59,8 +59,8 @@ class Value(nn.Module):
 
 
 class PPO(object):
-    def __init__(self, state_dim, action_dim, lr, gamma, policy_hd=64, value_hd=64,
-                 clip_eps=0.2, entropy_weight=0.01, num_minibatches=15, minibatch_size=256, max_grad=None):
+    def __init__(self, state_dim, action_dim, lr, gamma, policy_hd:int=64, value_hd:int=64,
+                 clip_eps=0.2, gae_lambda=0.95, entropy_weight=0.01, num_minibatches=15, minibatch_size=256, max_grad=None):
         self.policy = Policy(state_dim, action_dim, policy_hd).to(device)
         self.value = Value(state_dim, value_hd).to(device)
         self.policy_optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
@@ -85,27 +85,45 @@ class PPO(object):
         self.batches_per_episode = num_minibatches
         self.entropy_weight = entropy_weight
         self.clip_eps = clip_eps
+        self.gae_lambda = gae_lambda
+
+    def _gae(self, rewards, states, next_states, dones):
+        values = self.value.forward(states)
+        next_values = self.value.forward(next_states)
+
+        deltas = [(r + (1.0 - d) * self.gamma * nv - v) for r, nv, v, d in zip(rewards, values, next_values, dones)]
+        deltas = torch.stack(deltas).to(device).squeeze(-1)
+        gaes = deltas.clone()
+
+        for t in reversed(range(len(deltas - 1))):
+            gaes[t] = gaes[t] + (1 - dones[t]) * (self.gae_lambda * self.gamma * gaes[t])
+
+        return gaes
 
     def _update(self, batch: PPOBatch):
         new_dist = self.policy.forward(batch.state)
         new_value = self.value.forward(batch.state)
 
         # compute ratios
-        prob_ratio = torch.exp(new_dist.log_prob(batch.action).sum(dim=-1) - batch.action_logprob.sum(-1).detach())
+        prob_ratio = torch.exp(new_dist.log_prob(batch.action).sum(dim=-1) - batch.action_logprob.sum(dim=-1).detach())
         clipped_ratio = torch.clamp(prob_ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps)
+
+        # scale gae and get value target
+        value_target = batch.gae + new_value
+        gae_scaled = (batch.gae - torch.mean(batch.gae)) / (torch.std(batch.gae) + 1e-8)
 
         # compute the advantage function
         adv = batch.dis_rew - new_value.detach()
         adv_scaled = (adv - torch.mean(adv)) / (torch.std(adv) + 1e-8)
 
         # compute actor loss 
-        l_clip = -torch.mean(torch.min(prob_ratio * adv_scaled.detach(), clipped_ratio * adv_scaled.detach()))
+        l_clip = -torch.mean(torch.min(prob_ratio * gae_scaled.detach(), clipped_ratio * gae_scaled.detach()))
         l_entropy = -torch.mean(new_dist.entropy())
         actor_loss = l_clip + self.entropy_weight * l_entropy 
 
         # compute value loss
         value_loss_fct = torch.nn.MSELoss()
-        value_loss = value_loss_fct(batch.dis_rew, new_value)
+        value_loss = value_loss_fct(value_target.detach(), new_value)
 
         # optimize
         self.policy_optimizer.zero_grad()
@@ -137,6 +155,9 @@ class PPO(object):
         # compute discounted rewards
         disc = discount_rewards(rewards, self.gamma)
 
+        # compute gae
+        gaes = self._gae(rewards, states, next_states, dones)
+
         # sample and learn from minibatches TODO: put everything into one batch optionally
         for _ in range(self.batches_per_episode):
             ind = np.random.randint(low=0, high=actions.shape[0], size=self.minibatch_size)
@@ -147,6 +168,7 @@ class PPO(object):
                 next_state=next_states[ind],
                 reward=rewards[ind],
                 dis_rew=disc[ind],
+                gae=gaes[ind],
                 done=dones[ind]
             )
             self._update(batch)
@@ -174,6 +196,8 @@ class PPO(object):
         else: 
             action =  probs.sample()
 
+        # clamp action (bipedalwalker specific)
+        action = torch.clamp(action, -1.0, 1.0)
         act_logprob = probs.log_prob(action)
     
         ########## Your code ends here. ###########

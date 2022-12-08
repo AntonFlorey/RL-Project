@@ -20,7 +20,7 @@ save_video: false
 save_logging: false
 save_model: true
 save_stats: true
-use_wandb: true
+use_wandb: false
 silent: false
 
 agent: ppo
