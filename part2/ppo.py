@@ -8,6 +8,7 @@ import numpy as np
 from common import helper as h
 from collections import namedtuple
 from common.helper import discount_rewards
+from functools import reduce
 
 PPOBatch = namedtuple('Batch', ['state', 'action', 'action_logprob', 'next_state', 'reward', 'dis_rew', 'gae', 'done'])
 
@@ -29,11 +30,14 @@ class Policy(nn.Module):
         )
         # Task 1: Implement actor_logstd as a learnable parameter
         # Use log of std to make sure std doesn't become negative during training
-        self.actor_logstd = nn.parameter.Parameter(torch.zeros(action_dim, device=device), requires_grad=True)
+        #self.actor_logstd  = torch.ones(action_dim, device=device) * np.log(0.5)
+        self.actor_logstd = torch.zeros(action_dim, device=device)
 
     def forward(self, state):
         # Get mean of a Normal distribution (the output of the neural network)
         action_mean = self.actor_mean(state)
+        if torch.isnan(action_mean).any():
+            print(state)
 
         # Make sure action_logstd matches dimension of action_mean
         action_logstd = self.actor_logstd.expand_as(action_mean)
@@ -73,12 +77,12 @@ class PPO(object):
         self.max_grad_norm = max_grad
 
         # a simple buffer
-        self.states = []
-        self.actions = []
-        self.action_probs = []
-        self.rewards = []
-        self.dones = []
-        self.next_states = []
+        self.states = {}
+        self.actions = {}
+        self.action_probs = {}
+        self.rewards = {}
+        self.dones = {}
+        self.next_states = {}
 
         # PPO parameters
         self.minibatch_size = minibatch_size
@@ -88,9 +92,10 @@ class PPO(object):
         self.gae_lambda = gae_lambda
 
     def _gae(self, rewards, states, next_states, dones):
-        values = self.value.forward(states)
-        next_values = self.value.forward(next_states)
-
+        with torch.no_grad():
+            values = self.value.forward(states)
+            next_values = self.value.forward(next_states)
+        
         deltas = [(r + (1.0 - d) * self.gamma * nv - v) for r, nv, v, d in zip(rewards, values, next_values, dones)]
         deltas = torch.stack(deltas).to(device).squeeze(-1)
         gaes = deltas.clone()
@@ -105,63 +110,127 @@ class PPO(object):
         new_value = self.value.forward(batch.state)
 
         # compute ratios
-        prob_ratio = torch.exp(new_dist.log_prob(batch.action).sum(dim=-1) - batch.action_logprob.sum(dim=-1).detach())
+        prob_ratio = torch.exp(new_dist.log_prob(batch.action).sum(dim=-1) - batch.action_logprob.detach())
         clipped_ratio = torch.clamp(prob_ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps)
 
         # scale gae and get value target
-        value_target = batch.gae + new_value
-        gae_scaled = (batch.gae - torch.mean(batch.gae)) / (torch.std(batch.gae) + 1e-8)
-
-        # compute the advantage function
+        value_target = batch.dis_rew # batch.gae + new_value
+        
+        # compute the advantage function TODO: test GAE 
         adv = batch.dis_rew - new_value.detach()
-        adv_scaled = (adv - torch.mean(adv)) / (torch.std(adv) + 1e-8)
+        # scale if batch is larger than 1 (to prevent nan gradients)
+        if adv.shape[0] > 1:
+            adv_scaled = (adv - torch.mean(adv)) / (torch.std(adv) + 1e-10)
+        else:
+            adv_scaled = adv
 
         # compute actor loss 
-        l_clip = -torch.mean(torch.min(prob_ratio * gae_scaled.detach(), clipped_ratio * gae_scaled.detach()))
+        l_clip = -torch.mean(torch.min(prob_ratio * adv_scaled.detach(), clipped_ratio * adv_scaled.detach()))
         l_entropy = -torch.mean(new_dist.entropy())
-        actor_loss = l_clip + self.entropy_weight * l_entropy 
+        actor_loss = l_clip #+ self.entropy_weight * l_entropy 
+
+        if new_value.isnan().any():
+            print("BROKEN VALUE FUNCTION!")
+
+        if adv.isnan().any():
+            print("BROKEN ADVANTAGE!")
+        
+        if adv_scaled.isnan().any():
+            print("BROKEN SCALED ADVANTAGE!")
+            print(adv.shape)
+            print("centered: ", (adv - torch.mean(adv)))
+            print("stddev:", (torch.std(adv) + 1e-10))
+
+        if prob_ratio.isnan().any():
+            print("BROKEN RATIO!")
+
+        if clipped_ratio.isnan().any():
+            print("BROKEN CLIPPED RATIO!")
+
+        if l_clip.isnan().any():
+            print("BROKEN CLIP LOSS!")
 
         # compute value loss
-        value_loss_fct = torch.nn.MSELoss()
-        value_loss = value_loss_fct(value_target.detach(), new_value)
+        value_loss = F.mse_loss(new_value, value_target.detach())
 
         # optimize
         self.policy_optimizer.zero_grad()
-        actor_loss.backward()
-
         self.value_optimizer.zero_grad()
+
+        actor_loss.backward()
         value_loss.backward()
 
-        if self.max_grad_norm is not None:
-            nn.utils.clip_grad.clip_grad_norm(self.policy.parameters(), self.max_grad_norm)
-            nn.utils.clip_grad.clip_grad_norm(self.value.parameters(), self.max_grad_norm)
+        # if self.max_grad_norm is not None:
+        #     nn.utils.clip_grad.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm, error_if_nonfinite=True)
+        #     nn.utils.clip_grad.clip_grad_norm_(self.value.parameters(), self.max_grad_norm, error_if_nonfinite=True)
         
         self.policy_optimizer.step()
         self.value_optimizer.step()
-        
+
         return {}
 
     def update(self,):
-        actions = torch.stack(self.actions, dim=0).to(device).squeeze(-1)
-        action_probs = torch.stack(self.action_probs, dim=0) \
-                .to(device).squeeze(-1)
-        rewards = torch.stack(self.rewards, dim=0).to(device).squeeze(-1)
-        states = torch.stack(self.states, dim=0).to(device).squeeze(-1)
-        next_states = torch.stack(self.next_states, dim=0).to(device).squeeze(-1)
-        dones = torch.stack(self.dones, dim=0).to(device).squeeze(-1)
+        # go over all collected runs 
+
+        # print("collected rewards:", self.rewards)
+
+        actions = reduce(lambda a, b: a + b, self.actions.values(), [])
+        action_probs = reduce(lambda a, b: a + b, self.action_probs.values(), [])
+        rewards = reduce(lambda a, b: a + b, self.rewards.values(), [])
+        # print("rewards listed;", rewards)
+        states = reduce(lambda a, b: a + b, self.states.values(), [])
+        next_states = reduce(lambda a, b: a + b, self.next_states.values(), [])
+        dones = reduce(lambda a, b: a + b, self.dones.values(), [])
+        disc = reduce(lambda a, b: a + list(discount_rewards(torch.stack(b, dim=0).to(device).squeeze(-1), self.gamma)), self.rewards.values(), [])
+        # print("discounted rewards:", disc)
+        gaes = []
+        for run_id in self.actions.keys():
+            gae = self._gae(torch.stack(self.rewards[run_id], dim=0).to(device).squeeze(-1), 
+                            torch.stack(self.states[run_id], dim=0).to(device).squeeze(-1),
+                            torch.stack(self.next_states[run_id], dim=0).to(device).squeeze(-1),
+                            torch.stack(self.dones[run_id], dim=0).to(device).squeeze(-1))
+            gaes += gae
+        
+        actions = torch.stack(actions, dim=0).to(device).squeeze(-1).squeeze(-2)
+        action_probs = torch.stack(action_probs, dim=0) \
+                .to(device).squeeze(-1).squeeze(-1)
+        rewards = torch.stack(rewards, dim=0).to(device).squeeze(-1)
+        # print("torch rewards:", rewards)
+        states = torch.stack(states, dim=0).to(device).squeeze(-1)
+        next_states = torch.stack(next_states, dim=0).to(device).squeeze(-1)
+        dones = torch.stack(dones, dim=0).to(device).squeeze(-1)
+        disc = torch.stack(disc, dim=0).to(device).squeeze(-1)
+        gaes = torch.stack(gaes, dim=0).to(device).squeeze(-1)
         # clear buffer
-        self.states, self.actions, self.action_probs, self.rewards, self.dones, self.next_states = [], [], [], [], [], []
+        self.states, self.actions, self.action_probs, self.rewards, self.dones, self.next_states = {}, {}, {}, {}, {}, {}
 
-        # compute discounted rewards
-        disc = discount_rewards(rewards, self.gamma)
-
-        # compute gae
-        gaes = self._gae(rewards, states, next_states, dones)
-
-        # sample and learn from minibatches TODO: put everything into one batch optionally
-        for _ in range(self.batches_per_episode):
-            ind = np.random.randint(low=0, high=actions.shape[0], size=self.minibatch_size)
+        # sample and learn from minibatches
+        if self.batches_per_episode == -1:
             batch = PPOBatch(
+                state=states,
+                action=actions,
+                action_logprob=action_probs,
+                next_state=next_states,
+                reward=rewards,
+                dis_rew=disc,
+                gae=gaes,
+                done=dones
+            )
+            self._update(batch)
+            return {}
+
+        indices = np.arange(actions.shape[0])
+        for ep in range(self.batches_per_episode):
+            # print("sub episode:", ep)
+            #randomly shuffle indices 
+            np.random.shuffle(indices)
+            #create minibatches
+            i = 0
+            while i < len(indices):
+                ind = indices[i:min(i+self.minibatch_size, len(indices))]
+                # print("curr batch indices:", ind)
+                # print("current batch reward:", rewards[ind])
+                batch = PPOBatch(
                 state=states[ind],
                 action=actions[ind],
                 action_logprob=action_probs[ind],
@@ -170,9 +239,10 @@ class PPO(object):
                 dis_rew=disc[ind],
                 gae=gaes[ind],
                 done=dones[ind]
-            )
-            self._update(batch)
-
+                )
+                self._update(batch)
+                i += self.minibatch_size
+                
         return {}
 
     def get_action(self, observation, evaluation=False):
@@ -188,29 +258,30 @@ class PPO(object):
         #        3. the returned action and the act_logprob should be the torch.Tensors.
         #            Please always make sure the shape of variables is as you expected.
         
-        probs = self.policy.forward(x)
-        action = 0
+        with torch.no_grad():
+            probs = self.policy.forward(x)
+            action = 0
 
-        if evaluation:
-            action = probs.mean
-        else: 
-            action =  probs.sample()
+            if evaluation:
+                action = probs.mean
+            else: 
+                action =  probs.sample()
 
-        # clamp action (bipedalwalker specific)
-        action = torch.clamp(action, -1.0, 1.0)
-        act_logprob = probs.log_prob(action)
-    
-        ########## Your code ends here. ###########
+            # clamp action (bipedalwalker specific)
+            # action = torch.clamp(action, -1.0, 1.0)
+            act_logprob = probs.log_prob(action)
 
-        return action, act_logprob
+            ########## Your code ends here. ###########
 
-    def record(self, observation, action, action_prob, reward, done, next_observation):
-        self.states.append(torch.tensor(observation, dtype=torch.float32))
-        self.actions.append(torch.tensor(action, dtype=torch.float32))
-        self.action_probs.append(action_prob)
-        self.rewards.append(torch.tensor([reward], dtype=torch.float32))
-        self.dones.append(torch.tensor([done], dtype=torch.float32))
-        self.next_states.append(torch.tensor(next_observation, dtype=torch.float32))
+        return action, act_logprob.sum(dim=-1, keepdim=True)
+
+    def record(self, observation, action, action_prob, reward, done, next_observation, run_id):
+        self.states.setdefault(run_id, []).append(torch.tensor(observation, dtype=torch.float32))
+        self.actions.setdefault(run_id, []).append(torch.tensor(action, dtype=torch.float32))
+        self.action_probs.setdefault(run_id, []).append(action_prob)
+        self.rewards.setdefault(run_id, []).append(torch.tensor([reward], dtype=torch.float32))
+        self.dones.setdefault(run_id, []).append(torch.tensor([done], dtype=torch.float32))
+        self.next_states.setdefault(run_id, []).append(torch.tensor(next_observation, dtype=torch.float32))
 
     # You can implement these if needed, following the previous exercises.
     def load(self, filepath):

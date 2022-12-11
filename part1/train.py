@@ -149,7 +149,7 @@ def main(cfg):
             if cfg.agent_name == "ddpg": # ddpg
                 agent = DDPG(state_shape, action_dim, max_action,
                             cfg.lr, cfg.gamma, cfg.tau, cfg.batch_size, cfg.buffer_size, 
-                            cfg.actor_hd, cfg.critic_hd)
+                            cfg.actor_hd, cfg.critic_hd, cfg.expl_stddev)
             else:
                 agent = PG(state_shape[0], action_dim, cfg.lr, cfg.gamma)
             # collect some trainig data
@@ -187,7 +187,7 @@ def main(cfg):
                     stats['first_episode_over_target'] = ep
                     stats['time_until_over_target'] = train_time
 
-                if (ep % cfg.test_interval == 0):
+                if (ep % cfg.test_interval == 0 and ep >= 1000):
                     avg_rew = test(agent, env, num_episode=100, verbose=False)
                     print("Test performance is " + str(avg_rew))
                     if (avg_rew > best_avg_ret):
@@ -216,7 +216,7 @@ def main(cfg):
                 agent.save(cfg.model_path)
 
             stats['time_for_all_episodes'] = train_time
-            stats['end_avg_rew'] = test(agent, env, num_episode=10, verbose=False)
+            stats['end_avg_rew'] = test(agent, env, num_episode=150, verbose=False)
 
             if cfg.save_stats:
                 stats_path = work_dir/'logging'/f'{cfg.agent}_{cfg.env_name}_{seed}_stats.json'

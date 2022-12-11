@@ -11,10 +11,6 @@ import numpy as np
 from common import helper as h
 from common.buffer import Batch, ReplayBuffer
 
-policy_layer_size = 256 #256  
-critic_layer_size = 256 #256 
-expl_stddev = 0.1 #0.08
-
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Actor-critic agent
@@ -46,7 +42,8 @@ class Critic(nn.Module):
 
 
 class DDPG(object):
-    def __init__(self, state_shape, action_dim, max_action, lr, gamma, tau, batch_size, buffer_size=1e6, actor_hidden_dim=256, critic_hidden_dim=256):
+    def __init__(self, state_shape, action_dim, max_action, lr, gamma, tau, batch_size, buffer_size=1e6, 
+                actor_hidden_dim=256, critic_hidden_dim=256, expl_stddev=0.1):
         state_dim = state_shape[0]
         self.action_dim = action_dim
         self.max_action = max_action
@@ -62,6 +59,7 @@ class DDPG(object):
         self.batch_size = batch_size
         self.gamma = gamma
         self.tau = tau
+        self.expl_stddev = expl_stddev
         
         # used to count number of transitions in a trajectory
         self.buffer_ptr = 0
@@ -130,7 +128,7 @@ class DDPG(object):
         if (not evaluation) and self.buffer_ptr < self.random_transition: # collect random trajectories for better exploration.
             action = torch.rand(self.action_dim)
         else:
-            expl_noise = expl_stddev * self.max_action # the stddev of the expl_noise if not evaluation
+            expl_noise = self.expl_stddev * self.max_action # the stddev of the expl_noise if not evaluation
             
             # Task 2
             ########## Your code starts here. ##########

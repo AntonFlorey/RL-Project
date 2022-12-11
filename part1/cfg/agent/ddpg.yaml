@@ -1,14 +1,15 @@
 # @package _global_
-env_name: lunarlander_continuous_medium
+env_name: bipedalwalker_easy #lunarlander_continuous_medium
 agent_name: ddpg
 
 train_episodes: 5000
-early_stop_episodes: 300
-test_interval: 50
-gamma: 0.95 #0.95
-lr: 1e-3 #
-tau: 0.01 #0.01
-batch_size: 256 #256
-buffer_size: 10000 #1e6
+early_stop_episodes: 200
+test_interval: 25
+gamma: 0.99 #0.95
+lr: 5e-5 #5e-5 
+tau: 0.005 #0.01
+batch_size: 256 #256 
+buffer_size: 1e6 #1e6
 actor_hd: 400 #400
 critic_hd: 400 #400
+expl_stddev: 0.1
