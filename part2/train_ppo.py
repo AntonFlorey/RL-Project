@@ -1,6 +1,6 @@
 import sys, os
 sys.path.insert(0, os.path.abspath(".."))
-os.environ["MUJOCO_GL"] = "glfw" # for mujoco rendering
+os.environ["MUJOCO_GL"] = "egl" #"glfw" # for mujoco rendering
 import time
 from pathlib import Path
 import json
@@ -23,16 +23,19 @@ def to_numpy(tensor):
     return tensor.cpu().numpy().flatten()
 
 # Policy training function
-def train(agent: PPO, env, max_episode_steps=512, runs_per_episode=32):
+def train(agent: PPO, env, max_episode_steps=512, runs_per_episode=32, min_steps=1000):
     collected_reward_sums = []
     collected_timesteps = []
-    for run_id in range(runs_per_episode):
+    run = 0
+    steps = 0
+    while (run < runs_per_episode or steps < min_steps):
         # Run actual training        
         reward_sum, timesteps, done, episode_timesteps = 0, 0, False, 0
         # Reset the environment and observe the initial state
         obs = env.reset()
         while not done:
             episode_timesteps += 1
+            steps += 1
             
             # Sample action from policy
             action, act_logprob = agent.get_action(obs)
@@ -44,7 +47,7 @@ def train(agent: PPO, env, max_episode_steps=512, runs_per_episode=32):
                 done = True
 
             # Store action's outcome (so that the agent can improve its policy)
-            agent.record(obs, action, act_logprob, reward, done, next_obs, run_id)
+            agent.record(obs, action, act_logprob, reward, done, next_obs, run)
 
             # Store total episode reward
             reward_sum += reward
@@ -52,7 +55,7 @@ def train(agent: PPO, env, max_episode_steps=512, runs_per_episode=32):
 
             # update observation
             obs = next_obs.copy()
-        
+        run += 1
         collected_reward_sums.append(reward_sum)
         collected_timesteps.append(timesteps)
 
@@ -60,7 +63,7 @@ def train(agent: PPO, env, max_episode_steps=512, runs_per_episode=32):
     info = agent.update()
 
     # Return stats of training
-    info.update({'timesteps': np.mean(collected_timesteps),
+    info.update({'timesteps': np.sum(collected_timesteps),
                 'ep_reward': np.mean(collected_reward_sums),})
     return info
 
@@ -122,6 +125,12 @@ def main(cfg):
 
    # create a env
     env = make_env.create_env(cfg.env_name, seed=cfg.seed)
+    if cfg.save_video and not cfg.testing:
+        ep_trigger = 100
+        video_path = work_dir/'video'/'train'
+        env = gym.wrappers.RecordVideo(env, video_path,
+                                        episode_trigger=lambda x: x % ep_trigger == 0,
+                                        name_prefix=f'{cfg.agent}')
 
     state_shape = env.observation_space.shape
     action_dim = env.action_space.shape[0]
@@ -163,7 +172,7 @@ def main(cfg):
             for ep in range(cfg.train_episodes + 1):
                 # collect data and update the policy
                 start = time.thread_time()
-                train_info = train(agent, env, cfg.horizon, cfg.num_agents)
+                train_info = train(agent, env, cfg.horizon, cfg.num_agents, cfg.min_steps_per_ep)
                 end = time.thread_time()
                 train_time += (end - start)
 
@@ -233,9 +242,26 @@ def main(cfg):
                 print('Testing (seed='+ str(seed) + ') ...')
                 test(agent, env, num_episode=50)
 
+# gamma = 0.99
+# lam = 0.95
+
+# def gae(rewards, values, next_values, dones):
+#     deltas = [(r + (1.0 - d) * gamma * nv - v) for r, nv, v, d in zip(rewards, values, next_values, dones)]
+#     print("deltas: ", deltas)
+
+#     gaes = deltas.copy()
+#     for t in reversed(range(len(deltas)-1)):
+#         print(t)
+#         gaes[t] = gaes[t] + (1 - dones[t]) * (lam * gamma * gaes[t+1])
+#     print("gaes: ", gaes)
 
 # Entry point of the script
 if __name__ == "__main__":
+    # rew = [1,1,1,1]
+    # values = [0,0,0,0]
+    # next_values = [0,0,0,0]
+    # dones = [0,0,0,1]
+    # gae(rew, values, next_values, dones)
     main()
 
 

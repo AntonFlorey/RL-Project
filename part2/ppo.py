@@ -30,8 +30,8 @@ class Policy(nn.Module):
         )
         # Task 1: Implement actor_logstd as a learnable parameter
         # Use log of std to make sure std doesn't become negative during training
-        #self.actor_logstd  = torch.ones(action_dim, device=device) * np.log(0.5)
-        self.actor_logstd = torch.zeros(action_dim, device=device)
+        self.actor_logstd  = torch.ones(action_dim, device=device) * np.log(0.35)
+        #self.actor_logstd = torch.zeros(action_dim, device=device)
 
     def forward(self, state):
         # Get mean of a Normal distribution (the output of the neural network)
@@ -98,11 +98,9 @@ class PPO(object):
         
         deltas = [(r + (1.0 - d) * self.gamma * nv - v) for r, nv, v, d in zip(rewards, values, next_values, dones)]
         deltas = torch.stack(deltas).to(device).squeeze(-1)
-        gaes = deltas.clone()
-
-        for t in reversed(range(len(deltas - 1))):
-            gaes[t] = gaes[t] + (1 - dones[t]) * (self.gae_lambda * self.gamma * gaes[t])
-
+        gaes = deltas.clone().detach()
+        for t in reversed(range(len(deltas) - 1)):
+            gaes[t] = gaes[t] + (1 - dones[t]) * (self.gae_lambda * self.gamma * gaes[t+1])
         return gaes
 
     def _update(self, batch: PPOBatch):
@@ -114,41 +112,24 @@ class PPO(object):
         clipped_ratio = torch.clamp(prob_ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps)
 
         # scale gae and get value target
-        value_target = batch.dis_rew # batch.gae + new_value
+        value_target = batch.gae + new_value
+        # value_target = batch.dis_rew
         
-        # compute the advantage function TODO: test GAE 
-        adv = batch.dis_rew - new_value.detach()
+        # compute the advantage function
+        adv = batch.gae.clone()
+        #adv = batch.dis_rew - new_value.detach()
+
         # scale if batch is larger than 1 (to prevent nan gradients)
         if adv.shape[0] > 1:
             adv_scaled = (adv - torch.mean(adv)) / (torch.std(adv) + 1e-10)
         else:
+            print("this should not happen anymore!")
             adv_scaled = adv
 
         # compute actor loss 
         l_clip = -torch.mean(torch.min(prob_ratio * adv_scaled.detach(), clipped_ratio * adv_scaled.detach()))
         l_entropy = -torch.mean(new_dist.entropy())
-        actor_loss = l_clip #+ self.entropy_weight * l_entropy 
-
-        if new_value.isnan().any():
-            print("BROKEN VALUE FUNCTION!")
-
-        if adv.isnan().any():
-            print("BROKEN ADVANTAGE!")
-        
-        if adv_scaled.isnan().any():
-            print("BROKEN SCALED ADVANTAGE!")
-            print(adv.shape)
-            print("centered: ", (adv - torch.mean(adv)))
-            print("stddev:", (torch.std(adv) + 1e-10))
-
-        if prob_ratio.isnan().any():
-            print("BROKEN RATIO!")
-
-        if clipped_ratio.isnan().any():
-            print("BROKEN CLIPPED RATIO!")
-
-        if l_clip.isnan().any():
-            print("BROKEN CLIP LOSS!")
+        actor_loss = l_clip + self.entropy_weight * l_entropy 
 
         # compute value loss
         value_loss = F.mse_loss(new_value, value_target.detach())
@@ -171,18 +152,13 @@ class PPO(object):
 
     def update(self,):
         # go over all collected runs 
-
-        # print("collected rewards:", self.rewards)
-
         actions = reduce(lambda a, b: a + b, self.actions.values(), [])
         action_probs = reduce(lambda a, b: a + b, self.action_probs.values(), [])
         rewards = reduce(lambda a, b: a + b, self.rewards.values(), [])
-        # print("rewards listed;", rewards)
         states = reduce(lambda a, b: a + b, self.states.values(), [])
         next_states = reduce(lambda a, b: a + b, self.next_states.values(), [])
         dones = reduce(lambda a, b: a + b, self.dones.values(), [])
         disc = reduce(lambda a, b: a + list(discount_rewards(torch.stack(b, dim=0).to(device).squeeze(-1), self.gamma)), self.rewards.values(), [])
-        # print("discounted rewards:", disc)
         gaes = []
         for run_id in self.actions.keys():
             gae = self._gae(torch.stack(self.rewards[run_id], dim=0).to(device).squeeze(-1), 
@@ -195,7 +171,6 @@ class PPO(object):
         action_probs = torch.stack(action_probs, dim=0) \
                 .to(device).squeeze(-1).squeeze(-1)
         rewards = torch.stack(rewards, dim=0).to(device).squeeze(-1)
-        # print("torch rewards:", rewards)
         states = torch.stack(states, dim=0).to(device).squeeze(-1)
         next_states = torch.stack(next_states, dim=0).to(device).squeeze(-1)
         dones = torch.stack(dones, dim=0).to(device).squeeze(-1)
@@ -221,15 +196,18 @@ class PPO(object):
 
         indices = np.arange(actions.shape[0])
         for ep in range(self.batches_per_episode):
-            # print("sub episode:", ep)
             #randomly shuffle indices 
             np.random.shuffle(indices)
             #create minibatches
             i = 0
             while i < len(indices):
-                ind = indices[i:min(i+self.minibatch_size, len(indices))]
-                # print("curr batch indices:", ind)
-                # print("current batch reward:", rewards[ind])
+                if i + 2 * self.minibatch_size > len(indices):
+                    ind = indices[i:len(indices)]
+                    i = len(indices)
+                else:
+                    ind = indices[i:min(i+self.minibatch_size, len(indices))]
+                    i += self.minibatch_size
+
                 batch = PPOBatch(
                 state=states[ind],
                 action=actions[ind],
@@ -241,7 +219,6 @@ class PPO(object):
                 done=dones[ind]
                 )
                 self._update(batch)
-                i += self.minibatch_size
                 
         return {}
 
@@ -250,14 +227,6 @@ class PPO(object):
         if observation.ndim == 1: observation = observation[None] # add the batch dimension
         x = torch.from_numpy(observation).float().to(device)
 
-        # Task 1
-        ########## Your code starts here. ##########
-        # Hints: 1. the self.policy returns a normal distribution, check the PyTorch document to see 
-        #           how to calculate the log_prob of an action and how to sample.
-        #        2. if evaluation, return mean, otherwise, return a sample
-        #        3. the returned action and the act_logprob should be the torch.Tensors.
-        #            Please always make sure the shape of variables is as you expected.
-        
         with torch.no_grad():
             probs = self.policy.forward(x)
             action = 0
@@ -268,10 +237,8 @@ class PPO(object):
                 action =  probs.sample()
 
             # clamp action (bipedalwalker specific)
-            # action = torch.clamp(action, -1.0, 1.0)
+            action = torch.clamp(action, -1.0, 1.0)
             act_logprob = probs.log_prob(action)
-
-            ########## Your code ends here. ###########
 
         return action, act_logprob.sum(dim=-1, keepdim=True)
 
