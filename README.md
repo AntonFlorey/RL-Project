@@ -7,7 +7,7 @@ pip install -r requirements.txt
 pip install gym[box2d]
 
 cd part1
-python train.py testing=true save_video=false
+python test.py
 ```
 ### For Contributors
 

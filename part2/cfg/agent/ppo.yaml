@@ -1,23 +1,27 @@
 # @package _global_
-env_name: bipedalwalker_easy # lunarlander_continuous_medium 
+env_name:  bipedalwalker_easy # lunarlander_continuous_medium #
 agent_name: ppo
 
-train_episodes: 5000
-early_stop_episodes: 200
-start_testing: 3000
-test_interval: 25
+train_episodes: 2000
 gamma: 0.99 #0.95
-lr: 1e-4 #0.0003
-actor_hd: 400 #256 #400
-critic_hd: 400 #256 #400
+actor_hd: 128 #256 #400
+critic_hd: 128 #256 #400
 
 # ppo options
-grad_clipping: 0.5
-clip_eps: 0.2
-entropy_weight: 0
-num_agents: 1
-horizon: 2000
-num_minibathes: 5 #5
+grad_clipping: 1.0 # does not get used currently
+entropy_weight: 0.6
+num_agents: 5
+horizon: 400
+num_minibathes: 1 #5
 minibatch_size: 256 #128
 min_steps_per_ep: 0
 gae_lambda: 0.95
+
+# train parameter scheduling settings
+start_exploration_std: 0.8
+end_exploration_std: 0.1
+clip_eps: 0.2
+end_clip_eps: 0.1
+lr: 1e-3 #0.0003
+end_lr: 1e-4
+min_rew: 50

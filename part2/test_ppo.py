@@ -1,6 +1,6 @@
 import sys, os
 sys.path.insert(0, os.path.abspath(".."))
-os.environ["MUJOCO_GL"] = "glfw" # for mujoco rendering
+os.environ["MUJOCO_GL"] = "egl" # for mujoco rendering
 import time
 from pathlib import Path
 
@@ -12,8 +12,7 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning) 
 warnings.filterwarnings("ignore", category=DeprecationWarning) 
 
-from pg import PG
-from ddpg import DDPG
+from ppo import PPO
 from common import helper as h
 from common import logger as logger
 
@@ -61,7 +60,7 @@ def main():
     print("=======================================")
     print("===      TESTING LANDER MEDIUM      ===")
     print("=======================================")
-    agents = ["pg", "ddpg_400"]
+    agents = ["ppo"]
     #select working dir
     work_dir = Path().cwd()/'results'/'lunarlander_continuous_medium'
 
@@ -69,19 +68,15 @@ def main():
     env = make_env.create_env("lunarlander_continuous_medium", seed=1)
     state_shape = env.observation_space.shape
     action_dim = env.action_space.shape[0]
-    max_action = env.action_space.high[0]
 
     for agent_name in agents:
         print("---------------------------------------")
         print("Testing the " + agent_name + " agent....")
         print("---------------------------------------")
         # load agent
-        if agent_name == "pg":
-            agent = PG(state_shape[0], action_dim, 0.003, 0.99)
-        else:
-            agent = DDPG(state_shape, action_dim, max_action,
-                            lr=0.001, gamma=0.95, tau=0.01, batch_size=256, buffer_size=1e6,
-                            actor_hidden_dim=400, critic_hidden_dim=400)
+        agent = PPO(state_shape[0], action_dim, lr=0.001, gamma=0.99, policy_hd=128, value_hd=128, 
+                        clip_eps=0.2, gae_lambda=0.95, entropy_weight=0.8, num_minibatches=1, minibatch_size=156, max_grad=None)
+
         for seed in agent_seeds:
             print("-- Loading agent trained with seed=" + str(seed) + " --")
             model_path = work_dir/'model'/f'{agent_name}_lunarlander_continuous_medium_{seed}_params.pt'
@@ -95,7 +90,7 @@ def main():
     print("=======================================")
     print("===       TESTING WALKER EASY       ===")
     print("=======================================")
-    agents = ["pg", "ddpg_test"]
+    agents = ["ppo_early"]
     #select working dir
     work_dir = Path().cwd()/'results'/'bipedalwalker_easy'
 
@@ -103,19 +98,14 @@ def main():
     env = make_env.create_env("bipedalwalker_easy", seed=1)
     state_shape = env.observation_space.shape
     action_dim = env.action_space.shape[0]
-    max_action = env.action_space.high[0]
 
     for agent_name in agents:
         print("---------------------------------------")
         print("Testing the " + agent_name + " agent....")
         print("---------------------------------------")
         # load agent
-        if agent_name == "pg":
-            agent = PG(state_shape[0], action_dim, 0.0003, 0.99)
-        else:
-            agent = DDPG(state_shape, action_dim, max_action,
-                            lr=5e-5, gamma=0.99, tau=0.005, batch_size=256, buffer_size=1e6,
-                            actor_hidden_dim=400, critic_hidden_dim=400)
+        agent = PPO(state_shape[0], action_dim, lr=0.001, gamma=0.99, policy_hd=128, value_hd=128, 
+                        clip_eps=0.2, gae_lambda=0.95, entropy_weight=0.8, num_minibatches=1, minibatch_size=156, max_grad=None)
         for seed in agent_seeds:
             print("-- Loading agent trained with seed=" + str(seed) + " --")
             model_path = work_dir/'model'/f'{agent_name}_bipedalwalker_easy_{seed}_params.pt'

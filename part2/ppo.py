@@ -30,8 +30,8 @@ class Policy(nn.Module):
         )
         # Task 1: Implement actor_logstd as a learnable parameter
         # Use log of std to make sure std doesn't become negative during training
-        self.actor_logstd  = torch.ones(action_dim, device=device) * np.log(0.35)
-        #self.actor_logstd = torch.zeros(action_dim, device=device)
+        self.actor_logstd  = torch.ones(action_dim, device=device) * np.log(0.3)
+        # self.actor_logstd = torch.zeros(action_dim, device=device)
 
     def forward(self, state):
         # Get mean of a Normal distribution (the output of the neural network)
@@ -66,6 +66,7 @@ class PPO(object):
     def __init__(self, state_dim, action_dim, lr, gamma, policy_hd:int=64, value_hd:int=64,
                  clip_eps=0.2, gae_lambda=0.95, entropy_weight=0.01, num_minibatches=15, minibatch_size=256, max_grad=None):
         self.policy = Policy(state_dim, action_dim, policy_hd).to(device)
+        self.action_dim = action_dim
         self.value = Value(state_dim, value_hd).to(device)
         self.policy_optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
 
@@ -91,6 +92,18 @@ class PPO(object):
         self.clip_eps = clip_eps
         self.gae_lambda = gae_lambda
 
+    def set_policy_std(self, std):
+        self.policy.actor_logstd = torch.ones(self.action_dim, device=device) * np.log(std)
+
+    def set_clip_eps(self, eps):
+        self.clip_eps = eps
+
+    def set_lr(self, lr):
+        for g in self.policy_optimizer.param_groups:
+            g['lr'] = lr
+        for g in self.value_optimizer.param_groups:
+            g['lr'] = lr
+
     def _gae(self, rewards, states, next_states, dones):
         with torch.no_grad():
             values = self.value.forward(states)
@@ -112,12 +125,12 @@ class PPO(object):
         clipped_ratio = torch.clamp(prob_ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps)
 
         # scale gae and get value target
-        value_target = batch.gae + new_value
-        # value_target = batch.dis_rew
+        # value_target = batch.gae + new_value
+        value_target = batch.dis_rew
         
         # compute the advantage function
-        adv = batch.gae.clone()
-        #adv = batch.dis_rew - new_value.detach()
+        # adv = batch.gae
+        adv = batch.dis_rew - new_value.detach()
 
         # scale if batch is larger than 1 (to prevent nan gradients)
         if adv.shape[0] > 1:
@@ -131,6 +144,27 @@ class PPO(object):
         l_entropy = -torch.mean(new_dist.entropy())
         actor_loss = l_clip + self.entropy_weight * l_entropy 
 
+        if new_value.isnan().any():
+            print("BROKEN VALUE FUNCTION!")
+
+        if adv.isnan().any():
+            print("BROKEN ADVANTAGE!")
+        
+        if adv_scaled.isnan().any():
+            print("BROKEN SCALED ADVANTAGE!")
+            print(adv.shape)
+            print("centered: ", (adv - torch.mean(adv)))
+            print("stddev:", (torch.std(adv) + 1e-10))
+
+        if prob_ratio.isnan().any():
+            print("BROKEN RATIO!")
+
+        if clipped_ratio.isnan().any():
+            print("BROKEN CLIPPED RATIO!")
+
+        if l_clip.isnan().any():
+            print("BROKEN CLIP LOSS!")
+
         # compute value loss
         value_loss = F.mse_loss(new_value, value_target.detach())
 
@@ -141,9 +175,19 @@ class PPO(object):
         actor_loss.backward()
         value_loss.backward()
 
-        # if self.max_grad_norm is not None:
-        #     nn.utils.clip_grad.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm, error_if_nonfinite=True)
-        #     nn.utils.clip_grad.clip_grad_norm_(self.value.parameters(), self.max_grad_norm, error_if_nonfinite=True)
+        # check for nans
+        for param in self.policy.parameters():
+            g = param.grad
+            if g.isnan().any():
+                print("policy layer gradient is nan")
+                print("loss grad", actor_loss.grad)
+                print("clipped ratio loss", clipped_ratio.grad)
+                print("prob ratio grad", prob_ratio.grad)
+                print("advantage grad", adv_scaled.grad)
+
+        if self.max_grad_norm is not None:
+            nn.utils.clip_grad.clip_grad_norm_(self.policy.parameters(), np.inf, error_if_nonfinite=True)
+            nn.utils.clip_grad.clip_grad_norm_(self.value.parameters(), np.inf, error_if_nonfinite=True)
         
         self.policy_optimizer.step()
         self.value_optimizer.step()
@@ -237,7 +281,7 @@ class PPO(object):
                 action =  probs.sample()
 
             # clamp action (bipedalwalker specific)
-            action = torch.clamp(action, -1.0, 1.0)
+            #action = torch.clamp(action, -1.0, 1.0)
             act_logprob = probs.log_prob(action)
 
         return action, act_logprob.sum(dim=-1, keepdim=True)

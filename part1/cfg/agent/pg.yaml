@@ -3,8 +3,12 @@ env_name: lunarlander_continuous_medium
 agent_name: pg
 run_id: ??? # decided during execution
 
-train_episodes: 5000
+train_episodes: 4000
 gamma: 0.99
 lr: 3e-4
-batch_size: 100 #100
-buffer_size: 1e6
+expl_stddev: 0.3
+
+# linear anneal
+end_expl_stddev: 0.05
+end_lr: 1e-6
+min_rew: 0

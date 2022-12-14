@@ -37,8 +37,8 @@ class Policy(nn.Module):
         # Task 2: Implement actor_logstd as a learnable parameter
         # Use log of std to make sure std doesn't become negative during training
 
-        self.actor_logstd = torch.zeros(action_dim, device=device)
-        #self.actor_logstd = torch.ones(action_dim, device=device) * np.log(1)
+        #self.actor_logstd = torch.zeros(action_dim, device=device)
+        self.actor_logstd = torch.ones(action_dim, device=device) * np.log(0.5)
         #self.actor_logstd = nn.parameter.Parameter(self.actor_logstd, requires_grad=True) # for task 2 
 
     # Do a forward pass to map state to action
@@ -77,6 +77,14 @@ class PG(object):
         # Simple buffers for action probabilities and rewards
         self.action_probs = []
         self.rewards = []
+        self.action_dim = action_dim
+
+    def set_learning_rate(self, lr):
+        for g in self.optimizer.param_groups:
+            g['lr'] = lr
+
+    def set_expl_stddev(self, std):
+        self.policy.actor_logstd = torch.ones(self.action_dim, device=device) * np.log(std)
 
     def update(self,):
 

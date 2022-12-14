@@ -157,65 +157,98 @@ def main(cfg):
                 'num_episodes': cfg.train_episodes,
                 'early_stop_episode': -1,
                 'first_episode_over_target': -1,
+                'first_episode_test_over_target': -1,
                 'time_for_all_episodes': 0,
                 'time_until_early_stop': -1,
                 'time_until_over_target': -1,
+                'time_until_test_over_target': -1,
                 'early_stop_avg_rew': 0,
                 'end_avg_rew': 0
             }
 
-            train_time = 0
             early_stop_count = 0
             best_avg_ret = 0
             early_stop_ep = 0
+            running_ret = 0
+            new_ret_w = 0.05
+            start_time = time.thread_time()
+            total_timesteps = 0
+            avg_rew = 0
 
             for ep in range(cfg.train_episodes + 1):
-                # collect data and update the policy
-                start = time.thread_time()
-                train_info = train(agent, env)
-                end = time.thread_time()
-                train_time += (end - start)
+                # control learning rate
+                
+                progression = np.clip((running_ret - cfg.min_rew) / cfg.target_rew, 0, 1)
+                lr = (1.0 - progression) * cfg.lr + progression * cfg.end_lr
+                expl = (1.0 - progression) * cfg.expl_stddev + progression * cfg.end_expl_stddev
+                agent.set_learning_rate(lr)
+                agent.set_expl_stddev(expl)
 
+                # collect data and update the policy
+                train_info = train(agent, env)
+                
+                # collect test info to control lr
+                curr_test_rew = test(agent, env, num_episode=1, verbose=False)
+                running_ret = new_ret_w * curr_test_rew + (1.0 - new_ret_w) * running_ret
+                train_info["running_reward"] = running_ret
+
+                train_info["total_time_elapsed"] = time.thread_time() - start_time
+                total_timesteps += train_info["timesteps"]
+                train_info["total_timesteps"] = total_timesteps
+
+                if (train_info['ep_reward'] >= cfg.target_rew and stats['first_episode_over_target'] == -1):
+                    stats['first_episode_over_target'] = ep
+                    stats['time_until_over_target'] = time.thread_time() - start_time
+
+                # if (ep % cfg.test_interval == 0 and ep >= 1000):
+                #     avg_rew = test(agent, env, num_episode=100, verbose=False)
+                #     print("Test performance is " + str(avg_rew))
+                #     if (avg_rew > best_avg_ret):
+                #         best_avg_ret = avg_rew
+                #         early_stop_ep = ep
+                #         early_stop_count = 0
+                #         # save this state of the model
+                #         if (best_avg_ret >= cfg.target_rew):
+                #             if (stats['first_episode_test_over_target'] == -1):
+                #                 stats['first_episode_test_over_target'] = ep
+                #                 stats['time_until_test_over_target'] = time.thread_time() - start_time
+                #             if cfg.save_model:
+                #                 cfg.model_path = work_dir/'model'/f'{cfg.agent}_{cfg.env_name}_{seed}_params.pt'
+                #                 agent.save(cfg.model_path)
+                #             stats['early_stop_avg_rew'] = avg_rew
+                #             stats['early_stop_episode'] = early_stop_ep
+                #             stats['time_until_early_stop'] = time.thread_time() - start_time
+                #             # lower learning rate to focus on improving the found solution
+                #             agent.adjust_learning_rate(0.1)
+                #     else:
+                #         early_stop_count += cfg.test_interval
+                #         # early stopping
+                #         if (early_stop_count >= cfg.early_stop_episodes and best_avg_ret >= cfg.target_rew):
+                #             print("Stopped early in episode: " + str(early_stop_ep))
+                #             break
+                
                 if cfg.use_wandb:
                     wandb.log(train_info)
                 if cfg.save_logging:
                     L.log(**train_info)
-                if (not cfg.silent) and (ep % 100 == 0):
-                    print({"ep": ep, **train_info})
+                if (not cfg.silent) and (ep % 20 == 0):
+                    print({"ep": ep, **train_info, "avg_reward": avg_rew})
 
-                if (train_info['ep_reward'] >= cfg.target_rew and stats['first_episode_over_target'] == -1):
-                    stats['first_episode_over_target'] = ep
-                    stats['time_until_over_target'] = train_time
-
-                if (ep % cfg.test_interval == 0 and ep >= 1000):
-                    avg_rew = test(agent, env, num_episode=100, verbose=False)
-                    print("Test performance is " + str(avg_rew))
-                    if (avg_rew > best_avg_ret):
-                        best_avg_ret = avg_rew
-                        early_stop_ep = ep
-                        early_stop_count = 0
-                        # save this state of the model
-                        if (best_avg_ret >= cfg.target_rew):
-                            if cfg.save_model:
-                                cfg.model_path = work_dir/'model'/f'{cfg.agent}_{cfg.env_name}_{seed}_params.pt'
-                                agent.save(cfg.model_path)
-                            stats['early_stop_avg_rew'] = avg_rew
-                            stats['early_stop_episode'] = early_stop_ep
-                            stats['time_until_early_stop'] = train_time
-                            # lower learning rate to focus on improving the found solution
-                            agent.adjust_learning_rate(0.1)
-                    else:
-                        early_stop_count += cfg.test_interval
-                        # early stopping
-                        if (early_stop_count >= cfg.early_stop_episodes and best_avg_ret >= cfg.target_rew):
-                            print("Stopped early in episode: " + str(early_stop_ep))
-                            break
-
-            if (cfg.save_model and best_avg_ret < cfg.target_rew):
+                # early stopping variant b
+                if running_ret >= cfg.target_rew:
+                    if cfg.save_model:
+                        cfg.model_path = work_dir/'model'/f'{cfg.agent}_{cfg.env_name}_{seed}_params.pt'
+                        agent.save(cfg.model_path)
+                    stats['time_until_early_stop'] = time.thread_time() - start_time
+                    stats['early_stop_avg_rew'] = test(agent, env, num_episode=50, verbose=False)
+                    stats['early_stop_episode'] = ep
+                    break
+ 
+            if (cfg.save_model and stats['time_until_early_stop'] == -1):
                 cfg.model_path = work_dir/'model'/f'{cfg.agent}_{cfg.env_name}_{seed}_params.pt'
                 agent.save(cfg.model_path)
 
-            stats['time_for_all_episodes'] = train_time
+            stats['time_for_all_episodes'] = time.thread_time() - start_time
             stats['end_avg_rew'] = test(agent, env, num_episode=150, verbose=False)
 
             if cfg.save_stats:
@@ -246,7 +279,7 @@ def main(cfg):
                 env.reset(seed=seed)
                 h.set_seed(seed)
                 print('Testing (seed='+ str(seed) + ') ...')
-                test(agent, env, num_episode=50)
+                test(agent, env, num_episode=1)
      
         if cfg.save_video:
             # init agent
@@ -272,7 +305,7 @@ def main(cfg):
                 env.reset(seed=seed)
                 h.set_seed(seed)
                 print('Recording... (seed='+ str(seed) + ') ...')
-                test(agent, env, num_episode=3)
+                test(agent, env, num_episode=1)
 
 # Entry point of the script
 if __name__ == "__main__":

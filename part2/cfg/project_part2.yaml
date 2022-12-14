@@ -10,7 +10,7 @@ seeds:
     - 48
     - 128
 
-exp_name: bipedalwalker_easy #project_lander_medium
+exp_name: bipedalwalker_easy # project_lander_medium #
 run_id: ??? # decided during execution
 
 testing: false
@@ -23,8 +23,8 @@ save_stats: true
 use_wandb: false
 silent: false
 
-agent: ppo
-target_rew: 250 #100
+agent: ppo_early_final
+target_rew: 255 #100
 
 run_suffix: 0
 # ref: https://stackoverflow.com/questions/65104134/disable-file-output-of-hydra

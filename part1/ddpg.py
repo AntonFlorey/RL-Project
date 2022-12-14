@@ -72,6 +72,15 @@ class DDPG(object):
         for g in self.q_optim.param_groups:
             g['lr'] *= factor
 
+    def set_learning_rate(self, lr):
+        for g in self.pi_optim.param_groups:
+            g['lr'] = lr
+        for g in self.q_optim.param_groups:
+            g['lr'] = lr
+
+    def set_expl_stddev(self, std):
+        self.expl_stddev = std
+
     def update(self,):
         """ After collecting one trajectory, update the pi and q for #transition times: """
         info = {}

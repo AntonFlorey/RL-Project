@@ -2,7 +2,7 @@
 env_name: bipedalwalker_easy #lunarlander_continuous_medium
 agent_name: ddpg
 
-train_episodes: 5000
+train_episodes: 5000 # 2500
 early_stop_episodes: 200
 test_interval: 25
 gamma: 0.99 #0.95
@@ -12,4 +12,9 @@ batch_size: 256 #256
 buffer_size: 1e6 #1e6
 actor_hd: 400 #400
 critic_hd: 400 #400
-expl_stddev: 0.1
+expl_stddev: 0.1 # 0.5
+
+# learnig control
+min_rew: 0
+end_lr: 1e-7
+end_expl_stddev: 0.05
